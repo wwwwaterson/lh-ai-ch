@@ -4,11 +4,17 @@ A simple document processing system for uploading, viewing, and searching PDF do
 
 ## Features
 
-- Upload PDF documents
-- View list of uploaded documents
-- Search across document content
+- Upload PDF documents with validation and size limits
+- Extract text and page count from uploaded PDFs
+- View paginated list of uploaded documents
+- Search across document content with pagination
 - View individual document details with extracted text
-- Delete documents
+- Delete documents and associated files
+- Tag documents with custom labels
+- Filter documents by tag
+
+Uploads are validated by content type, magic bytes and size limits to ensure safe processing.
+
 
 ## Tech Stack
 
@@ -64,23 +70,69 @@ npm run dev
 ### Documents
 
 | Method | Endpoint | Description |
-|--------|----------|-------------|
+|------|--------|------------|
 | POST | `/documents` | Upload a PDF document |
-| GET | `/documents` | List all documents |
+| GET | `/documents` | List documents (supports pagination and tag filtering) |
 | GET | `/documents/{id}` | Get document details |
 | DELETE | `/documents/{id}` | Delete a document |
+| POST | `/documents/{id}/tags` | Add tags to a document |
+| GET | `/documents/{id}/tags` | List tags for a document |
+| DELETE | `/documents/{id}/tags/{tag}` | Remove a tag from a document |
+
+#### Pagination
+
+List endpoints support optional pagination using query parameters:
+
+- `skip`: number of records to skip
+- `limit`: maximum number of records to return (max 1000)
+
+Example:
+GET /documents?skip=0&limit=50
+
+#### Tag Filtering
+
+Documents endpoint supports tag filtering using query parameter:
+
+- `tag`: tag to filter by
+
+Example:
+GET /documents?tag=important
+
+
 
 ### Search
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/search?q={query}` | Search documents by content |
+| GET | `/search?q={query}` | Search documents by content (supports pagination) |
+
+#### Search Parameters
+
+- `q`: search query (required)
+- `skip`: number of records to skip
+- `limit`: maximum number of results (max 1000)
+
+Example:
+GET /search?q=important&skip=0&limit=50
+
+
 
 ### Health
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Health check endpoint |
+
+
+
+## Limits
+
+The application enforces reasonable limits for uploaded files and tags,
+such as maximum file size and tag length.
+
+These limits are currently defined at the application level and can be
+easily promoted to environment configuration if needed.
+
 
 ## Project Structure
 
@@ -114,9 +166,18 @@ docproc/
 
 ### Backend
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | See docker-compose.yml |
+| Variable | Description |
+|--------|------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SECRET_KEY` | Application secret key (required) |
+| `UPLOAD_DIR` | Directory for uploaded files |
+| `CORS_ORIGINS` | Allowed CORS origins |
+
+
+> All backend environment variables must be provided via environment configuration.
+> The application will fail to start if required variables are missing.
+
+
 
 ### Frontend
 
