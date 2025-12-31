@@ -1,8 +1,17 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Table
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
 from app.database import Base
+
+
+# Association table for many-to-many relationship between documents and tags
+document_tags = Table(
+    'document_tags',
+    Base.metadata,
+    Column('document_id', Integer, ForeignKey('documents.id', ondelete='CASCADE'), primary_key=True),
+    Column('tag_id', Integer, ForeignKey('tags.id', ondelete='CASCADE'), primary_key=True)
+)
 
 
 class Document(Base):
@@ -21,6 +30,13 @@ class Document(Base):
         uselist=False,
         cascade="all, delete-orphan"  # Automatically delete ProcessingStatus when Document is deleted
     )
+    
+    # Many-to-many relationship with tags
+    tags = relationship(
+        "Tag",
+        secondary=document_tags,
+        back_populates="documents"
+    )
 
 
 class ProcessingStatus(Base):
@@ -33,3 +49,19 @@ class ProcessingStatus(Base):
     processed_at = Column(DateTime, nullable=True)
 
     document = relationship("Document", back_populates="processing_status")
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True, nullable=False, index=True)  # Unique, normalized tag name
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Many-to-many relationship with documents
+    documents = relationship(
+        "Document",
+        secondary=document_tags,
+        back_populates="tags"
+    )
+
