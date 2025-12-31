@@ -16,7 +16,10 @@ class Document(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     processing_status = relationship(
-        "ProcessingStatus", back_populates="document", uselist=False
+        "ProcessingStatus",
+        back_populates="document",
+        uselist=False,
+        cascade="all, delete-orphan"  # Automatically delete ProcessingStatus when Document is deleted
     )
 
 
