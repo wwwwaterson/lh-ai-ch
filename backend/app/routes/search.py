@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,10 +10,30 @@ router = APIRouter()
 
 
 @router.get("/search")
-async def search_documents(q: str, db: AsyncSession = Depends(get_db)):
-    # Use SQLAlchemy ORM with parameterized query to prevent SQL injection
-    # The ilike() method safely escapes user input
-    stmt = select(Document).where(Document.content.ilike(f"%{q}%"))
+async def search_documents(
+    q: str,
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db)
+):
+    # Validate search query first
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="Search query cannot be empty")
+
+    # Validate pagination parameters
+    if skip < 0:
+        raise HTTPException(status_code=400, detail="skip must be >= 0")
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if limit > 1000:
+        raise HTTPException(status_code=400, detail="limit cannot exceed 1000")
+
+    stmt = (
+        select(Document)
+        .where(Document.content.ilike(f"%{q}%"))
+        .offset(skip)
+        .limit(limit)
+    )
     result = await db.execute(stmt)
     documents = result.scalars().all()
 
