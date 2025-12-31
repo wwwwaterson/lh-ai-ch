@@ -1,14 +1,18 @@
 import os
+import asyncio
 from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, UploadFile, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+import aiofiles
 
 from app.database import get_db
 from app.models import Document, ProcessingStatus
 from app.schemas import DocumentResponse, DocumentDetail
-from app.services.pdf_processor import extract_text_from_pdf
+from app.services.pdf_processor import extract_text_from_pdf_sync
 from app.config import settings
 
 router = APIRouter()
@@ -30,7 +34,6 @@ async def upload_document(file: UploadFile, db: AsyncSession = Depends(get_db)):
     
     # Sanitize filename to prevent path traversal
     # Extract only the base filename, removing any directory components
-    from pathlib import Path
     safe_filename = Path(file.filename).name
     
     # Reject invalid filenames
@@ -45,13 +48,14 @@ async def upload_document(file: UploadFile, db: AsyncSession = Depends(get_db)):
     if not os.path.abspath(file_path).startswith(os.path.abspath(settings.UPLOAD_DIR)):
         raise HTTPException(status_code=400, detail="Invalid file path")
     
-    # Stream file to disk with size validation
-    # This avoids loading the entire file into memory
+    # Stream file to disk with size validation using async file I/O
+    # This prevents blocking the event loop during file writes
     file_size = 0
     first_chunk = True
     
     try:
-        with open(file_path, "wb") as f:
+        # Use aiofiles for non-blocking file writes
+        async with aiofiles.open(file_path, "wb") as f:
             while chunk := await file.read(CHUNK_SIZE):
                 file_size += len(chunk)
                 
@@ -68,10 +72,18 @@ async def upload_document(file: UploadFile, db: AsyncSession = Depends(get_db)):
                         raise HTTPException(status_code=400, detail="File is not a valid PDF")
                     first_chunk = False
                 
-                f.write(chunk)
+                # Non-blocking write
+                await f.write(chunk)
         
-        # Process PDF to extract text
-        text_content, page_count = await extract_text_from_pdf(file_path)
+        # Offload CPU-intensive PDF processing to a separate process
+        # This prevents blocking the async event loop during PDF parsing
+        loop = asyncio.get_event_loop()
+        with ProcessPoolExecutor() as pool:
+            text_content, page_count = await loop.run_in_executor(
+                pool,
+                extract_text_from_pdf_sync,
+                file_path
+            )
         
         # Save document to database
         document = Document(
