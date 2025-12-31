@@ -11,8 +11,8 @@ from sqlalchemy.orm import selectinload
 import aiofiles
 
 from app.database import get_db
-from app.models import Document, ProcessingStatus
-from app.schemas import DocumentResponse, DocumentDetail
+from app.models import Document, ProcessingStatus, Tag
+from app.schemas import DocumentResponse, DocumentDetail, AddTagsRequest
 from app.services.pdf_processor import extract_text_from_pdf_sync
 from app.config import settings
 
@@ -125,6 +125,7 @@ async def upload_document(file: UploadFile, db: AsyncSession = Depends(get_db)):
 async def list_documents(
     skip: int = 0,
     limit: int = 100,
+    tag: str = None,  # Optional tag filter
     db: AsyncSession = Depends(get_db)
 ):
     # Validate pagination parameters
@@ -135,21 +136,32 @@ async def list_documents(
     if limit > 1000:
         raise HTTPException(status_code=400, detail="limit cannot exceed 1000")
     
-    # Use eager loading to fetch documents with their processing status in a single query
-    # This prevents N+1 queries (1 for documents + N for each status)
-    # Apply pagination with offset and limit
+    # Use eager loading to fetch documents with their processing status and tags
+    # This prevents N+1 queries
     stmt = (
         select(Document)
-        .options(selectinload(Document.processing_status))
-        .offset(skip)
-        .limit(limit)
+        .options(
+            selectinload(Document.processing_status),
+            selectinload(Document.tags)
+        )
     )
+    
+    # Filter by tag if provided
+    if tag:
+        # Normalize tag for case-insensitive search
+        normalized_tag = tag.strip().lower()
+        # Join with tags table to filter documents that have the specified tag
+        stmt = stmt.join(Document.tags).where(Tag.name == normalized_tag)
+    
+    # Apply pagination
+    stmt = stmt.offset(skip).limit(limit)
+    
     result = await db.execute(stmt)
     documents = result.scalars().all()
 
     response = []
     for doc in documents:
-        # Access the already-loaded relationship (no additional query)
+        # Access the already-loaded relationships (no additional queries)
         status = doc.processing_status
         response.append(
             DocumentResponse(
@@ -159,6 +171,7 @@ async def list_documents(
                 page_count=doc.page_count,
                 status=status.status if status else "unknown",
                 created_at=doc.created_at,
+                tags=[{"id": t.id, "name": t.name, "created_at": t.created_at} for t in doc.tags]
             )
         )
 
@@ -167,11 +180,14 @@ async def list_documents(
 
 @router.get("/documents/{document_id}")
 async def get_document(document_id: int, db: AsyncSession = Depends(get_db)):
-    # Eager load processing_status to avoid separate query
+    # Eager load processing_status and tags to avoid separate queries
     stmt = (
         select(Document)
         .where(Document.id == document_id)
-        .options(selectinload(Document.processing_status))
+        .options(
+            selectinload(Document.processing_status),
+            selectinload(Document.tags)
+        )
     )
     result = await db.execute(stmt)
     document = result.scalar_one_or_none()
@@ -179,7 +195,7 @@ async def get_document(document_id: int, db: AsyncSession = Depends(get_db)):
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Access the already-loaded relationship (no additional query)
+    # Access the already-loaded relationships (no additional queries)
     status = document.processing_status
 
     return DocumentDetail(
@@ -190,7 +206,68 @@ async def get_document(document_id: int, db: AsyncSession = Depends(get_db)):
         page_count=document.page_count,
         status=status.status if status else "unknown",
         created_at=document.created_at,
+        tags=[{"id": t.id, "name": t.name, "created_at": t.created_at} for t in document.tags]
     )
+
+
+
+
+@router.post("/documents/{document_id}/tags")
+async def add_tags_to_document(
+    document_id: int,
+    request: AddTagsRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Add tags to a document.
+    Tags are normalized (lowercase, trimmed) and deduplicated.
+    Creates new tags if they don't exist.
+    """
+    # Fetch the document
+    stmt = select(Document).where(Document.id == document_id).options(selectinload(Document.tags))
+    result = await db.execute(stmt)
+    document = result.scalar_one_or_none()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Normalize and deduplicate tags
+    normalized_tags = list(set(tag.strip().lower() for tag in request.tags if tag.strip()))
+    
+    if not normalized_tags:
+        raise HTTPException(status_code=400, detail="No valid tags provided")
+    
+    # Get existing tag names for this document
+    existing_tag_names = {t.name for t in document.tags}
+    
+    # Process each tag
+    for tag_name in normalized_tags:
+        # Skip if document already has this tag
+        if tag_name in existing_tag_names:
+            continue
+        
+        # Check if tag exists in database
+        tag_stmt = select(Tag).where(Tag.name == tag_name)
+        tag_result = await db.execute(tag_stmt)
+        tag = tag_result.scalar_one_or_none()
+        
+        # Create tag if it doesn't exist
+        if not tag:
+            tag = Tag(name=tag_name)
+            db.add(tag)
+            await db.flush()  # Get tag.id without committing
+        
+        # Add tag to document
+        document.tags.append(tag)
+    
+    await db.commit()
+    await db.refresh(document)
+    
+    return {
+        "message": "Tags added successfully",
+        "document_id": document.id,
+        "tags": [{"id": t.id, "name": t.name, "created_at": t.created_at} for t in document.tags]
+    }
 
 
 @router.delete("/documents/{document_id}")
