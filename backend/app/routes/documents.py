@@ -122,10 +122,28 @@ async def upload_document(file: UploadFile, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/documents")
-async def list_documents(db: AsyncSession = Depends(get_db)):
+async def list_documents(
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db)
+):
+    # Validate pagination parameters
+    if skip < 0:
+        raise HTTPException(status_code=400, detail="skip must be >= 0")
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if limit > 1000:
+        raise HTTPException(status_code=400, detail="limit cannot exceed 1000")
+    
     # Use eager loading to fetch documents with their processing status in a single query
     # This prevents N+1 queries (1 for documents + N for each status)
-    stmt = select(Document).options(selectinload(Document.processing_status))
+    # Apply pagination with offset and limit
+    stmt = (
+        select(Document)
+        .options(selectinload(Document.processing_status))
+        .offset(skip)
+        .limit(limit)
+    )
     result = await db.execute(stmt)
     documents = result.scalars().all()
 
