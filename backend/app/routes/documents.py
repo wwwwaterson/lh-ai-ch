@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, UploadFile, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 import aiofiles
 
 from app.database import get_db
@@ -122,15 +123,16 @@ async def upload_document(file: UploadFile, db: AsyncSession = Depends(get_db)):
 
 @router.get("/documents")
 async def list_documents(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Document))
+    # Use eager loading to fetch documents with their processing status in a single query
+    # This prevents N+1 queries (1 for documents + N for each status)
+    stmt = select(Document).options(selectinload(Document.processing_status))
+    result = await db.execute(stmt)
     documents = result.scalars().all()
 
     response = []
     for doc in documents:
-        status_result = await db.execute(
-            select(ProcessingStatus).where(ProcessingStatus.document_id == doc.id)
-        )
-        status = status_result.scalar_one_or_none()
+        # Access the already-loaded relationship (no additional query)
+        status = doc.processing_status
         response.append(
             DocumentResponse(
                 id=doc.id,
@@ -147,16 +149,20 @@ async def list_documents(db: AsyncSession = Depends(get_db)):
 
 @router.get("/documents/{document_id}")
 async def get_document(document_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Document).where(Document.id == document_id))
+    # Eager load processing_status to avoid separate query
+    stmt = (
+        select(Document)
+        .where(Document.id == document_id)
+        .options(selectinload(Document.processing_status))
+    )
+    result = await db.execute(stmt)
     document = result.scalar_one_or_none()
 
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    status_result = await db.execute(
-        select(ProcessingStatus).where(ProcessingStatus.document_id == document.id)
-    )
-    status = status_result.scalar_one_or_none()
+    # Access the already-loaded relationship (no additional query)
+    status = document.processing_status
 
     return DocumentDetail(
         id=document.id,
@@ -171,19 +177,20 @@ async def get_document(document_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/documents/{document_id}")
 async def delete_document(document_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Document).where(Document.id == document_id))
+    # Eager load processing_status to avoid separate query
+    stmt = (
+        select(Document)
+        .where(Document.id == document_id)
+        .options(selectinload(Document.processing_status))
+    )
+    result = await db.execute(stmt)
     document = result.scalar_one_or_none()
 
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    status_result = await db.execute(
-        select(ProcessingStatus).where(ProcessingStatus.document_id == document.id)
-    )
-    status = status_result.scalar_one_or_none()
-    if status:
-        await db.delete(status)
-
+    # Access the already-loaded relationship (no additional query)
+    # The cascade delete will handle the status automatically
     await db.delete(document)
     await db.commit()
 
