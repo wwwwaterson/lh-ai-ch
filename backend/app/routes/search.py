@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models import Document
 from app.schemas import SearchResult
 
 router = APIRouter()
@@ -10,18 +11,20 @@ router = APIRouter()
 
 @router.get("/search")
 async def search_documents(q: str, db: AsyncSession = Depends(get_db)):
-    query = text(f"SELECT id, filename, content FROM documents WHERE content ILIKE '%{q}%'")
-    result = await db.execute(query)
-    rows = result.fetchall()
+    # Use SQLAlchemy ORM with parameterized query to prevent SQL injection
+    # The ilike() method safely escapes user input
+    stmt = select(Document).where(Document.content.ilike(f"%{q}%"))
+    result = await db.execute(stmt)
+    documents = result.scalars().all()
 
     results = []
-    for row in rows:
-        content = row[2] or ""
+    for doc in documents:
+        content = doc.content or ""
         snippet = content[:200] + "..." if len(content) > 200 else content
         results.append(
             SearchResult(
-                id=row[0],
-                filename=row[1],
+                id=doc.id,
+                filename=doc.filename,
                 snippet=snippet,
             )
         )
