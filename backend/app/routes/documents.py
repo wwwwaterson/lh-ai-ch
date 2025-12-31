@@ -207,9 +207,20 @@ async def delete_document(document_id: int, db: AsyncSession = Depends(get_db)):
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Access the already-loaded relationship (no additional query)
-    # The cascade delete will handle the status automatically
+    # Delete the physical file from disk
+    file_path = os.path.join(settings.UPLOAD_DIR, document.filename)
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except OSError as e:
+            # Log the error but continue with database deletion
+            # This ensures the operation is idempotent and database consistency is maintained
+            import logging
+            logging.error(f"Failed to delete file {file_path}: {e}")
+
+    # Delete from database (cascade will handle the processing_status automatically)
     await db.delete(document)
     await db.commit()
 
     return {"message": "Document deleted"}
+
